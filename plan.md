@@ -334,36 +334,59 @@ graph TD
 
 ### Part 5: 终端 UI 与用户体验（3 篇）
 
-**第 21 篇：Ink 框架深度定制 — 在终端中运行 React**
-- Forked Ink 的架构：reconciler → layout (Yoga) → render → terminal output
-- 自定义扩展：virtual scroll、ANSI 优化、terminal querying、focus management
-- 性能优化：`line-width-cache`, `node-cache`, `optimizer.ts`
-- 关键文件：`ink/reconciler.ts`, `ink/layout/`, `ink/render-node-to-output.ts`, `ink/root.ts`
+**第 21 篇：Ink 框架深度定制 — 在终端中运行 React** ✅
+- 架构全景：React Reconciler → Ink DOM（7 种元素类型）→ Yoga 布局 → renderNodeToOutput → Output 操作 → Screen 缓冲区 → LogUpdate diff → optimizer → ANSI stdout
+- 自定义 Reconciler：`createReconciler` 桥接 React 19，`DOMElement` 携带 scrollTop/dirty/eventHandlers 等丰富状态，`markDirty()` O(depth) 祖先冒泡 + 叶子节点 Yoga dirty
+- 布局层：`LayoutNode` 接口抽象 Yoga WASM 绑定，`YogaLayoutNode` 适配器，commit 阶段 `onComputeLayout()` 调用 `calculateLayout()`，`measureTextNode` 处理换行/textWrap
+- 双缓冲 + 帧节流：frontFrame/backFrame 交换，`throttle(queueMicrotask(onRender), 16ms)` 微任务延迟保证 useLayoutEffect 数据在同帧生效
+- Screen 缓冲区：CharPool（ASCII Int32Array 快速路径）、StylePool（transition 缓存）、HyperlinkPool（5 分钟 reset），`writeLineToScreen` 独立函数优化 JIT
+- Blit 优化：未变化子树从 prevScreen 块拷贝（TypedArray.set），`layoutShifted` 标记控制全屏 damage vs 窄 damage
+- 差分引擎 LogUpdate：`diffEach` 逐 cell 对比 + damage region 限定，DECSTBM 硬件滚动优化（tmux 下降级），`fullResetSequence_CAUSES_FLICKER` 兜底
+- Patch 优化器：8 条单遍规则（合并 cursorMove、折叠连续 cursorTo、抵消 cursorHide/Show、拼接 styleStr 等）
+- ScrollBox 虚拟滚动：绕过 React setState 直接修改 DOM scrollTop + markDirty + queueMicrotask 合并，pendingScrollDelta 分帧 drain（xterm.js 自适应阶梯 vs 原生终端 proportional，上限 innerHeight-1），stickyScroll 自动吸底，scrollClampMin/Max 防空白
+- 事件系统：两条派发路径——Dispatcher 实现 capture/bubble 两阶段（用于键盘/焦点事件），dispatchClick/dispatchHover 走独立的 parentNode 冒泡（用于鼠标事件）；事件优先级映射到 React Scheduler
+- Hit Test + 鼠标：nodeCache 布局缓存 AABB 碰撞检测，逆序子节点遍历保证后绘制优先命中
+- 文本选择：anchor+focus 双端点，scrolledOffAbove/Below 跨滚动选区保持，样式覆盖写入 Screen 缓冲区
+- Terminal Querier：DA1 哨兵无超时能力探测；DEC 2026 同步输出判断走环境变量启发式（`isSynchronizedOutputSupported()`，非 DECRQM 查询）
+- 焦点管理：FocusManager 焦点栈（max 32）+ Tab 循环去重 + 节点移除自动恢复
+- 性能工具：`line-width-cache`（~50x 减少 stringWidth 调用）、`node-cache` WeakMap、`FrameEvent` 11 维帧计时、`CLAUDE_CODE_COMMIT_LOG` commit 级调试日志
+- 关键文件：`ink/reconciler.ts`, `ink/ink.tsx`, `ink/dom.ts`, `ink/layout/node.ts`, `ink/layout/yoga.ts`, `ink/renderer.ts`, `ink/render-node-to-output.ts`, `ink/output.ts`, `ink/screen.ts`, `ink/log-update.ts`, `ink/optimizer.ts`, `ink/frame.ts`, `ink/line-width-cache.ts`, `ink/node-cache.ts`, `ink/focus.ts`, `ink/hit-test.ts`, `ink/selection.ts`, `ink/terminal-querier.ts`, `ink/events/dispatcher.ts`, `ink/components/ScrollBox.tsx`, `ink/root.ts`
 
-**第 22 篇：设计系统 — 终端 UI 的组件化实践**
-- 基础组件：`ThemedText`, `ThemedBox`, `Dialog`, `Pane`, `Divider`, `ProgressBar`, `Tabs`
-- 主题系统：`ThemeProvider` + `Theme` 类型 + dark/light mode
-- 工具 UI 协议：每个工具的 `renderToolUseMessage` / `renderToolResultMessage` / `renderToolUseProgressMessage`
-- 关键文件：`components/design-system/`, `utils/theme.ts`, `tools/BashTool/UI.tsx`
+**第 22 篇：设计系统 — 终端 UI 的组件化实践** ✅
+- 主题系统：`Theme` 类型 80+ 语义化颜色 token，6 套主题（dark/light × 标准/daltonized/ansi），`ThemeSetting` 支持 `'auto'`（检测终端实际背景色而非 OS appearance，`$COLORFGBG` 同步猜测 + OSC 11 异步校正 + BT.709 亮度判定）
+- `ThemeProvider`：React Context 桥接，preview/save/cancel 三态主题预览，OSC 11 终端明暗检测，三种粒度 Hook（`useTheme`/`useThemeSetting`/`usePreviewTheme`）
+- 基础组件：`ThemedText`（`resolveColor` 双通道 + `TextHoverColorContext` 跨 Box 级联 + dimColor 用 `inactive` 替代 ANSI dim）、`ThemedBox`（border/background 色解析）
+- 布局组件：`Pane`（斜杠命令标准容器，Modal 内自动省略 Divider）、`Divider`（全宽/带标题居中/ANSI 宽度计算）、`Dialog`（`isCancelActive` 快捷键冲突管理 + `hideBorder` 嵌套支持）
+- 交互组件：`Tabs`（三层焦点协作：默认 Header 导航 + opt-in blur/focus 注册 `registerOptIn` + `navFromContent` 额外放权）、`ProgressBar`（9 级 Unicode block 亚字符精度）、`FuzzyPicker`、`ListItem`、`Ratchet`（单调递增高度锁防布局抖动）
+- 非 React 颜色工具：`color.ts` 柯里化着色函数，Apple Terminal 256 色降级
+- 工具 UI 协议：10 个 render/查询方法覆盖正常态、异常态、聚合态、搜索索引四维度（`renderToolUseMessage` 必须处理 `Partial<Input>` 流式不完整参数、`renderToolResultMessage` 丰富 options 含 tools/isTranscriptMode/isBriefOnly/input、`renderToolUseProgressMessage`、`renderToolUseQueuedMessage`、`renderToolUseRejectedMessage`、`renderToolUseErrorMessage`、`renderGroupedToolUse` 非 verbose 聚合渲染、`renderToolUseTag`、`isResultTruncated`、`extractSearchText` transcript 搜索索引），`verbose` + `theme` 透传 + Fallback 降级
+- 关键文件：`components/design-system/ThemeProvider.tsx`, `components/design-system/ThemedText.tsx`, `components/design-system/ThemedBox.tsx`, `components/design-system/color.ts`, `components/design-system/Pane.tsx`, `components/design-system/Dialog.tsx`, `components/design-system/Tabs.tsx`, `components/design-system/ProgressBar.tsx`, `components/design-system/Divider.tsx`, `components/design-system/Ratchet.tsx`, `components/design-system/ListItem.tsx`, `components/design-system/StatusIcon.tsx`, `components/design-system/FuzzyPicker.tsx`, `components/design-system/Byline.tsx`, `components/design-system/KeyboardShortcutHint.tsx`, `utils/theme.ts`, `Tool.ts:560-640`
 
-**第 23 篇：Memory 系统 — AI 记忆的多层架构**
-- CLAUDE.md 发现链：project root → parent dirs → home dir → additional dirs
-- Auto-memory：`memdir/` 自动记忆系统
-- Session memory：`services/SessionMemory/` 会话记忆
-- Memory attachments：相关记忆预取与注入
-- 关键文件：`memdir/memdir.ts`, `memdir/findRelevantMemories.ts`, `utils/claudemd.ts`, `context.ts`
+**第 23 篇：Memory 系统 — AI 记忆的多层架构** ✅
+- 五层记忆架构：CLAUDE.md 指令文件 → Auto Memory（memdir）→ Session Memory → Agent Memory → Relevant Memories
+- CLAUDE.md 四类型层级发现：Managed → User → Project（目录向上遍历）→ Local，加载顺序与优先级相反（recency bias），`@include` 指令与 `TEXT_FILE_EXTENSIONS` 安全约束
+- Auto Memory（memdir）：`getAutoMemPath()` 三级解析（env → settings → default），`findCanonicalGitRoot()` worktree 共享，四类闭合分类法（user/feedback/project/reference），`MEMORY.md` 索引（200 行 / 25KB 双重截断），`DIR_EXISTS_GUIDANCE` Prompt-代码协同优化
+- Background Extract Memories：`initExtractMemories()` 闭包作用域状态管理，`hasMemoryWritesSince()` 主 Agent 互斥，`createAutoMemCanUseTool()` 权限沙箱（只读 + memdir 写），`maxTurns: 5` 防兔子洞，`pendingContext` 合并模式（只保留最新）
+- Session Memory：10 段结构化模板（模板不可变 + 内容可变），双阈值触发（token 增长 AND tool call 计数），`waitForSessionMemoryExtraction()` 与 compact 协同，section 大小控制（2000 token/section，12000 token 总量）
+- Agent Memory：三种 scope（user/project/local），`loadAgentMemoryPrompt()` fire-and-forget 目录创建，scope 级 Prompt 指引
+- Relevant Memories：双阶段召回（`scanMemoryFiles` 单遍扫描 → `selectRelevantMemories` Sonnet sideQuery），异步预取 + Attachment 注入，预计算 `memoryAge` 保证 Prompt Cache 字节稳定性，`collectSurfacedMemories()` session 级去重（扫描 messages 自然随 compact 重置）
+- Auto Dream：三重门控（时间 24h / 会话数 5 / 文件锁），失败回滚锁 mtime 防止"梦被永久打断"
+- 关键文件：`memdir/memdir.ts`, `memdir/paths.ts`, `memdir/findRelevantMemories.ts`, `memdir/memoryScan.ts`, `memdir/memoryTypes.ts`, `memdir/memoryAge.ts`, `memdir/teamMemPaths.ts`, `memdir/teamMemPrompts.ts`, `services/SessionMemory/sessionMemory.ts`, `services/SessionMemory/prompts.ts`, `services/SessionMemory/sessionMemoryUtils.ts`, `services/extractMemories/extractMemories.ts`, `services/extractMemories/prompts.ts`, `services/autoDream/autoDream.ts`, `tools/AgentTool/agentMemory.ts`, `utils/claudemd.ts`, `utils/attachments.ts`, `context.ts`, `constants/prompts.ts`
 
 ---
 
 ### 附录篇（2 篇）
 
-**第 24 篇：Skill/Plugin 开发实战 — 基于源码理解扩展点**
-- 自定义 Agent 编写（`.claude/agents/*.md` frontmatter 全解）
-- 自定义 Skill 编写（`.claude/skills/*.md` 配置参考）
-- Plugin 系统架构与 manifest 格式
-- Hook 脚本编写模式
+**第 24 篇：Skill/Plugin 开发实战 — 基于源码理解扩展点** ✅
+- 四层扩展机制总览：Hook → Skill → Agent → Plugin（轻量到重量递进）
+- 自定义 Skill 编写：目录格式（`skill-name/SKILL.md`）、frontmatter 15+ 字段全解（`parseSkillFrontmatterFields()`）、Inline vs Fork 执行模式、变量替换（`${CLAUDE_SKILL_DIR}` 等）、条件 Skill（`paths` 过滤 + `ignore` 库匹配）、动态发现（`discoverSkillDirsForPaths()` 向上遍历）
+- 自定义 Agent 编写：frontmatter 20+ 字段全解（`parseAgentFromMarkdown()`）、工具约束三策略（白名单/黑名单/通配符）、Agent 记忆三 scope（user/project/local）、六级覆盖优先级（built-in → plugin → user → project → flag → managed）、MCP 服务器集成（按名引用 vs 内联定义）
+- Plugin 系统架构：标准目录结构（commands/skills/agents/hooks/output-styles）、manifest（plugin.json）格式、命名空间（`pluginName:commandName`）、Plugin 特有变量（`${CLAUDE_PLUGIN_ROOT}`, `${user_config.X}` 敏感脱敏）
+- Hook 脚本编写：stdin JSON 输入机制（`child.stdin.write()` + `BaseHookInput` schema）、环境变量仅提供少量上下文（`CLAUDE_PROJECT_DIR`/`CLAUDE_PLUGIN_ROOT`/`CLAUDE_ENV_FILE`）、四种 Hook 类型（command/prompt/agent/http）、27 个事件类型、退出码 2 分事件语义（PreToolUse 阻止工具 vs Stop 继续对话 vs UserPromptSubmit 阻止 prompt）、Frontmatter Hook 的 Stop→SubagentStop 自动转换、异步 Hook 与 asyncRewake 唤醒模式
+- MCP Skill 桥接：`mcpSkillBuilders.ts` write-once registry 打破循环依赖、MCP Skill 安全限制（不执行 Shell 命令嵌入）
+- 关键文件：`skills/loadSkillsDir.ts`, `skills/bundledSkills.ts`, `skills/mcpSkillBuilders.ts`, `tools/AgentTool/loadAgentsDir.ts`, `tools/AgentTool/agentMemory.ts`, `tools/SkillTool/SkillTool.ts`, `utils/plugins/pluginLoader.ts`, `utils/plugins/loadPluginCommands.ts`, `utils/plugins/schemas.ts`, `utils/hooks/registerFrontmatterHooks.ts`, `utils/frontmatterParser.ts`, `types/plugin.ts`
 
-**第 25 篇：架构模式总结 — 可迁移到你自己项目的设计模式**
+**第 25 篇：架构模式总结 — 可迁移到你自己项目的设计模式** ✅
 - 编译期 DCE 模式（同一份代码构建多版本）
 - 极简 Store 模式（35 行代码桥接 React 与非 React）
 - 工具注册表模式（单一来源 + 条件注册）

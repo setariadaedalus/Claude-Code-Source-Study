@@ -79,12 +79,14 @@ graph TD
 - 关键文件：`main.tsx`, `query.ts`, `Tool.ts`, `commands.ts`, `tools.ts`
 
 **第 2 篇：启动优化 — 毫秒级 CLI 启动的工程艺术**
-- 侧效果前置：`startMdmRawRead()`, `startKeychainPrefetch()`, `profileCheckpoint()`
-- `feature()` 编译期 DCE（Dead Code Elimination）机制
-- 懒加载 `require()` vs 静态 `import` 的取舍
+- 快速路径（Fast Path）：`--version` 零 import 返回，10+ 条瀑布式快速路径链
+- 侧效果前置：`startMdmRawRead()`, `startKeychainPrefetch()` 利用 ~135ms 模块求值并行 I/O
+- API 预连接：`preconnectAnthropicApi()` 在用户打字时完成 TCP+TLS 握手
+- 早期输入捕获：`startCapturingEarlyInput()` 在 REPL 就绪前缓冲用户按键
+- `feature()` 编译期 DCE（Dead Code Elimination）+ `require()` 条件加载
 - `memoize` 防重复初始化（`init()` 使用 lodash `memoize` 包装）
-- 快速路径：`--version` 零 import 返回
-- 关键文件：`entrypoints/cli.tsx`, `main.tsx:1-80`, `entrypoints/init.ts`
+- 启动性能度量：`profileCheckpoint()` 双模式（采样日志 + 详细分析）
+- 关键文件：`entrypoints/cli.tsx`, `main.tsx:1-20,907-967`, `entrypoints/init.ts`, `utils/apiPreconnect.ts`, `utils/earlyInput.ts`, `utils/secureStorage/keychainPrefetch.ts`, `utils/settings/mdm/rawRead.ts`, `utils/startupProfiler.ts`
 
 **第 3 篇：状态管理 — React 与非 React 世界的状态桥接**
 - 三层状态架构：bootstrap/state（Session 全局）→ Store + AppState（UI 层）→ ToolUseContext（运行时上下文容器）

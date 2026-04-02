@@ -87,12 +87,14 @@ graph TD
 - 关键文件：`entrypoints/cli.tsx`, `main.tsx:1-80`, `entrypoints/init.ts`
 
 **第 3 篇：状态管理 — React 与非 React 世界的状态桥接**
-- 35 行极简 Store 实现（`state/store.ts`）
-- `AppState` 类型设计：messages, tools, permissions, tasks, plugins 的统一状态
-- `AppStateProvider` React Context 与外部 store 的桥接
-- `bootstrap/state.ts`：session 级全局状态（sessionId, projectRoot, CWD）
-- `ToolUseContext`：跨工具的运行时上下文传递
-- 关键文件：`state/store.ts`, `state/AppStateStore.ts`, `state/AppState.tsx`, `Tool.ts:158-300`
+- 三层状态架构：bootstrap/state（Session 全局）→ Store + AppState（UI 层）→ ToolUseContext（运行时上下文容器）
+- 35 行极简 Store 实现（`state/store.ts`）：`getState/setState/subscribe` + `Object.is` 相等性检查
+- `AppState` 类型设计：`DeepImmutable<T>` 包装、70+ 字段按领域分组（mcp, plugins, tasks 等）
+- `AppStateProvider` 通过 `useSyncExternalStore` 桥接 React，Context value 放 Store 实例（稳定引用）
+- `onChangeAppState`：集中式副作用处理（权限同步、模型持久化、缓存清理）
+- `bootstrap/state.ts`：DAG 叶子节点，session 级全局状态（sessionId, projectRoot, CWD, cost, telemetry）
+- `ToolUseContext`：面向每次交互/工具执行的运行时上下文容器，`createSubagentContext()` 实现 Agent 隔离 + 选择性共享
+- 关键文件：`state/store.ts`, `state/AppStateStore.ts`, `state/AppState.tsx`, `state/onChangeAppState.ts`, `bootstrap/state.ts`, `Tool.ts:158-254`, `utils/forkedAgent.ts`
 
 ---
 
